@@ -14,6 +14,7 @@ import { createCommandRateLimiter, isOwnerOnlyDenied } from './utils/securityPol
 import CONFIG from './config.js'
 import { pantherHeader, pantherRow, pantherFooter } from '../Panther/utils/tableStyle.js'
 import { handleMenuCategoryReply } from '../Panther/commands/Menu.js'
+import { loadLegacyCommands } from '../Panther/utils/legacyPlugins.js'
 import {
   seenStatusIds,
   processStatusMessage,
@@ -226,6 +227,24 @@ for (const file of fs.readdirSync(commandsDir).filter(f => f.endsWith('.js'))) {
     }
   }
 }
+
+// Register the running ZIP's feature commands through the compatibility bridge.
+// Native commands and aliases win on collisions; old menu/design commands are excluded.
+const legacyCommands = await loadLegacyCommands()
+let legacyRegistered = 0
+for (const legacyCommand of legacyCommands) {
+  const name = String(legacyCommand.name || '').toLowerCase()
+  if (!name || commands.has(name)) continue
+  const safeAliases = (legacyCommand.aliases || []).filter(alias => {
+    const normalized = String(alias).toLowerCase()
+    return normalized && !commands.has(normalized) && !commandAliases.has(normalized)
+  })
+  legacyCommand.aliases = safeAliases
+  commands.set(name, legacyCommand)
+  for (const alias of safeAliases) commandAliases.set(alias, name)
+  legacyRegistered++
+}
+console.log(`[LEGACY] Registered ${legacyRegistered} compatible commands; native commands retained on collisions.`)
 
 function isAllowedUser(msg, sockUserJid) {
   const mode = String(CONFIG.MODE || 'private').toLowerCase()
@@ -950,6 +969,45 @@ async function start() {
           continue
         }
 
+        let commandGroupMeta = null
+        let callerIsGroupAdmin = false
+        let botIsGroupAdmin = false
+        if (command.groupOnly || command.adminOnly || command.botAdminOnly) {
+          if (!isGroupChat) {
+            await sock.sendMessage(from, { text: 'This command can only be used in a group.' }, { quoted: msg })
+            if (shouldShowPresence(isGroup)) setTimeout(() => clearChatPresence(from), 5000)
+            continue
+          }
+          try {
+            commandGroupMeta = await sock.groupMetadata(from)
+            const participants = commandGroupMeta?.participants || []
+            const senderDigits = getSenderPhone(senderJid)
+            const botDigits = getSenderPhone(sock.user?.id)
+            const identities = participant => [participant?.id, participant?.jid, participant?.pn, participant?.phoneNumber].filter(Boolean)
+            const senderPart = participants.find(participant => identities(participant).some(jid =>
+              getCleanJid(jid) === getCleanJid(senderJid) || getSenderPhone(jid) === senderDigits
+            ))
+            const botPart = participants.find(participant => identities(participant).some(jid =>
+              getSenderPhone(jid) === botDigits
+            ))
+            const isAdminRole = participant => participant?.admin === 'admin' || participant?.admin === 'superadmin'
+            callerIsGroupAdmin = isAdminRole(senderPart)
+            botIsGroupAdmin = isAdminRole(botPart)
+          } catch (error) {
+            logError('Command Permission Lookup', name, senderJid, error.message)
+          }
+          if ((command.adminOnly && !callerIsGroupAdmin) || (command.botAdminOnly && !botIsGroupAdmin)) {
+            securityStore.audit('group_command_denied', name)
+            await sock.sendMessage(from, {
+              text: command.botAdminOnly && !botIsGroupAdmin
+                ? 'The bot needs group admin permission to run this command.'
+                : 'Only a group admin can run this command.'
+            }, { quoted: msg })
+            if (shouldShowPresence(isGroup)) setTimeout(() => clearChatPresence(from), 5000)
+            continue
+          }
+        }
+
         const shieldState = securityStore.getState()
         if (shieldState.lockdown && !isOwner) {
           securityStore.audit('lockdown_command_blocked', name)
@@ -1005,7 +1063,10 @@ async function start() {
             global,
             isOwner,
             sender: senderJid,
-            senderNumber: senderNumber
+            senderNumber: senderNumber,
+            groupMeta: commandGroupMeta,
+            isGroupAdmin: callerIsGroupAdmin,
+            isBotGroupAdmin: botIsGroupAdmin
           })
         } catch (error) {
           logError('Command Execution', cmdName, senderJid, error.message)
