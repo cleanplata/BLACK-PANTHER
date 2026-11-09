@@ -1,7 +1,7 @@
 const inline = value => String(value ?? '—').replace(/[\r\n]+/g, ' ').replace(/\s+/g, ' ').trim();
 
 export function pantherHeader(botName, section) {
-  return `> ╭──〔 𖤍 ${inline(botName)} // ${inline(section).toUpperCase()} 〕──◈`;
+  return `> ╭──〔 ◈ ${inline(botName)} // ${inline(section).toUpperCase()} 〕──◈`;
 }
 
 export function pantherRow(label, value, marker = '◈') {
