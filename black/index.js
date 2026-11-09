@@ -12,6 +12,7 @@ import { loadSudoList } from './utils/sudoStore.js'
 import { securityStore } from './utils/securityStore.js'
 import { createCommandRateLimiter, isOwnerOnlyDenied } from './utils/securityPolicy.js'
 import CONFIG from './config.js'
+import { maybeAutoReact } from './automations.js'
 import { pantherHeader, pantherRow, pantherFooter } from '../Panther/utils/tableStyle.js'
 import { handleMenuCategoryReply } from '../Panther/commands/Menu.js'
 import { loadLegacyCommands } from '../Panther/utils/legacyPlugins.js'
@@ -763,6 +764,14 @@ async function start() {
         const isGroup = from.endsWith('@g.us')
         const senderJid = getRealSenderJid(msg)
         const isFromMe = msg.key?.fromMe
+
+        if (!isEdit) {
+          try {
+            await maybeAutoReact(sock, msg, CONFIG)
+          } catch (error) {
+            logError('Auto React', null, from, error.message)
+          }
+        }
 
         if (!isFromMe && !isEdit && CONFIG.AUTO_READ === true) {
           await autoReadMessages([msg.key])
