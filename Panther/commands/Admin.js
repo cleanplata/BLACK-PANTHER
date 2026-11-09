@@ -1,5 +1,8 @@
 import CONFIG from '../../black/config.js'
 import { pantherHeader, pantherRow, pantherDivider, pantherFooter } from '../utils/tableStyle.js'
+import fs from 'fs'
+import path from 'path'
+import { securityStore } from '../../black/utils/securityStore.js'
 
 const FEATURE_FLAGS = {
   antidelete: { label: 'Anti-delete', key: 'ANTIDELETE' },
@@ -131,6 +134,7 @@ export const commands = [
       if (ownerOnlyReply(sock, from, msg, isOwner)) return
       const rows = [
         pantherRow('MODE', String(CONFIG.MODE || 'private').toUpperCase(), '⛨'),
+        pantherRow('EMERGENCY LOCKDOWN', securityStore.getState().lockdown ? 'ACTIVE' : 'STANDBY', '◉'),
         ...Object.values(FEATURE_FLAGS).map(({ label, key }) => pantherRow(label.toUpperCase(), CONFIG[key] ? 'ON' : 'OFF', '◉')),
         pantherRow('AUTO-READ CHATS', CONFIG.AUTO_READ ? 'ON' : 'OFF', '◉')
       ]
@@ -145,6 +149,57 @@ export const commands = [
       ].join('\n')
       return sock.sendMessage(from, {
         text: statusText
+      }, { quoted: msg })
+    }
+  },
+  {
+    name: 'lockdown',
+    aliases: ['shield'],
+    description: 'Owner-only emergency shield: block all commands from non-owners until lifted.',
+    category: 'Settings',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg, text, isOwner }) => {
+      if (ownerOnlyReply(sock, from, msg, isOwner)) return
+      const requested = String(text || 'status').trim().toLowerCase()
+      if (requested === 'status') {
+        const state = securityStore.getState()
+        return sock.sendMessage(from, {
+          text: `${pantherHeader(CONFIG.BOT_NAME || 'Black Panther', 'EMERGENCY SHIELD')}\n${pantherRow('STATE', state.lockdown ? 'LOCKDOWN ACTIVE' : 'STANDBY', state.lockdown ? '⛨' : '◉')}\n${state.corrupt ? `${pantherRow('WARNING', 'Security state unreadable; failing closed', '⚠')}\n` : ''}${pantherFooter('OWNER COMMANDS ONLY WHEN ACTIVE')}`
+        }, { quoted: msg })
+      }
+      if (!['on', 'off'].includes(requested)) {
+        return sock.sendMessage(from, { text: 'Use `.lockdown on`, `.lockdown off`, or `.lockdown status`.' }, { quoted: msg })
+      }
+      const state = securityStore.setLockdown(requested === 'on')
+      securityStore.audit(requested === 'on' ? 'lockdown_enabled' : 'lockdown_disabled', 'lockdown')
+      return sock.sendMessage(from, {
+        text: `${pantherHeader(CONFIG.BOT_NAME || 'Black Panther', 'EMERGENCY SHIELD')}\n${pantherRow('STATE', state.lockdown ? 'LOCKDOWN ACTIVE' : 'STANDBY', state.lockdown ? '⛨' : '◉')}\n${state.lockdown ? 'Non-owner commands are now blocked, regardless of the current public/private mode.' : 'Normal command access is restored according to the configured bot mode.'}\n${pantherFooter('OWNER ACCESS RETAINED')}`
+      }, { quoted: msg })
+    }
+  },
+  {
+    name: 'securitylog',
+    aliases: ['auditlog'],
+    description: 'Owner-only: show the latest privacy-minimal security events.',
+    category: 'Settings',
+    ownerOnly: true,
+    execute: async ({ sock, from, msg, isOwner }) => {
+      if (ownerOnlyReply(sock, from, msg, isOwner)) return
+      const logPath = path.join(process.cwd(), 'data', 'panther-security.log')
+      let entries = []
+      try {
+        entries = fs.readFileSync(logPath, 'utf8').trim().split('\n').filter(Boolean).slice(-10).map(line => {
+          try {
+            const entry = JSON.parse(line)
+            return `> ┃ ${entry.at || 'unknown time'} · ${entry.event || 'event'}${entry.command ? ` · ${entry.command}` : ''}`
+          } catch { return null }
+        }).filter(Boolean)
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error
+      }
+      const rows = entries.length ? entries : ['> ┃ No security events recorded yet.']
+      return sock.sendMessage(from, {
+        text: [pantherHeader(CONFIG.BOT_NAME || 'Black Panther', 'SECURITY AUDIT'), pantherDivider('LATEST EVENTS'), ...rows, pantherFooter('NO MESSAGE CONTENT OR PHONE NUMBERS STORED')].join('\n')
       }, { quoted: msg })
     }
   },

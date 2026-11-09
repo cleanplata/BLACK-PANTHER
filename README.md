@@ -53,6 +53,15 @@ npm install
 npm start
 ```
 
+## 🛡️ Security controls
+
+- `.lockdown on` enables the emergency shield; while active, only the recognized bot owner can run commands, regardless of public/private mode. Use `.lockdown off` to restore the configured access mode, or `.lockdown status` to inspect it.
+- `.security` shows the current runtime controls. `.securitylog` shows the latest privacy-minimal security events; it does not store message bodies or phone numbers.
+- Commands marked owner-only are rejected centrally before execution. Non-owner command bursts are throttled at 8 commands per 10 seconds.
+- Lockdown state and audit files are stored under `data/` with owner-only file permissions where supported. Hosts with ephemeral filesystems may clear this state when the instance is replaced or restarted.
+
+These are bot-level safeguards, not a substitute for protecting the WhatsApp session, hosting account, deployment secrets, and server access.
+
 ---
 
 # 🌐 CONNECT WITH US

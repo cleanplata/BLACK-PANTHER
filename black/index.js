@@ -9,6 +9,8 @@ import { Boom } from '@hapi/boom'
 import { fileURLToPath } from 'url'
 import moment from 'moment-timezone'
 import { loadSudoList } from './utils/sudoStore.js'
+import { securityStore } from './utils/securityStore.js'
+import { createCommandRateLimiter, isOwnerOnlyDenied } from './utils/securityPolicy.js'
 import CONFIG from './config.js'
 import { pantherHeader, pantherRow, pantherFooter } from '../Panther/utils/tableStyle.js'
 import { handleMenuCategoryReply } from '../Panther/commands/Menu.js'
@@ -41,6 +43,7 @@ const processedMessages = new Set()
 const MESSAGE_TIMEOUT = 3000
 const executingCommands = new Set()
 const presenceTimers = new Map()
+const commandRateLimiter = createCommandRateLimiter({ limit: 8, windowMs: 10_000 })
 
 const phoneToLidMap = new Map()
 const lidToPhoneMap = new Map()
@@ -939,6 +942,27 @@ async function start() {
           continue
         }
 
+        const senderNumber = getSenderPhone(senderJid)
+        const isOwner = isDevUser(senderJid) || senderNumber === OWNER_NUMBER
+        if (isOwnerOnlyDenied(command, isOwner)) {
+          securityStore.audit('owner_command_denied', name)
+          if (shouldShowPresence(isGroup)) setTimeout(() => clearChatPresence(from), 5000)
+          continue
+        }
+
+        const shieldState = securityStore.getState()
+        if (shieldState.lockdown && !isOwner) {
+          securityStore.audit('lockdown_command_blocked', name)
+          if (shouldShowPresence(isGroup)) setTimeout(() => clearChatPresence(from), 5000)
+          continue
+        }
+
+        if (!isOwner && !commandRateLimiter.allow(senderJid)) {
+          securityStore.audit('command_rate_limited', name)
+          if (shouldShowPresence(isGroup)) setTimeout(() => clearChatPresence(from), 5000)
+          continue
+        }
+
         const currentMode = String(CONFIG.MODE || 'private').toLowerCase()
         const ownerMayChangeMode = name === 'mod' && (isDevUser(senderJid) || getSenderPhone(senderJid) === OWNER_NUMBER)
         if (currentMode === 'group' && !isGroupChat && !ownerMayChangeMode) continue
@@ -957,9 +981,6 @@ async function start() {
         if (isSuperDevCommand) {
           console.log(`⚡ Super dev command detected from: ${senderJid}`)
         }
-
-        const senderNumber = getSenderPhone(senderJid)
-        const isOwner = isDevUser(senderJid) || senderNumber === OWNER_NUMBER;
 
         const displayNumber = senderNumber === '120363399604046397' ? 'Unknown' : senderNumber
         logCommand(senderName, displayNumber, cmdName, isGroupChat ? groupName : 'Private Chat', groupName)
